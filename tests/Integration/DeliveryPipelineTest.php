@@ -79,7 +79,10 @@ class DeliveryPipelineTest extends TestCase
 
         $dead = $this->app->make(AmqpConnection::class)->consumeChannel()->basic_get('messages.dead', true);
         $this->assertNotNull($dead);
-        $this->assertSame(['message_id' => $id, 'attempt' => 1], json_decode($dead->getBody(), true));
+        $this->assertSame(
+            ['message_id' => $id, 'attempt' => 1, 'error' => 'Provider rejected the recipient'],
+            json_decode($dead->getBody(), true),
+        );
     }
 
     public function test_duplicate_delivery_is_processed_once(): void

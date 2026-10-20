@@ -148,7 +148,7 @@ The Integration suite needs RabbitMQ on `RABBITMQ_HOST`, and is skipped without 
 
 CI runs three jobs:
 
-- Unit and Feature tests on PHP 8.2, 8.3 and 8.4, plus PHPStan;
+- Unit and Feature tests on PHP 8.3 and 8.4, plus PHPStan;
 - the Integration suite against RabbitMQ and MariaDB service containers;
 - a smoke test of the full `docker compose` stack.
 
