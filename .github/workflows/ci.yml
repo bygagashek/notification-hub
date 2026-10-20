@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.2', '8.3', '8.4']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: pdo_sqlite, sockets
+          coverage: none
+      - run: composer install --prefer-dist --no-interaction --no-progress
+      - run: cp .env.example .env && php artisan key:generate
+      - run: vendor/bin/phpunit --testsuite Unit,Feature
+      - run: vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+        if: matrix.php == '8.3'
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      rabbitmq:
+        image: rabbitmq:4-alpine
+        ports: ['5672:5672']
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q check_port_connectivity"
+          --health-interval 5s --health-retries 30
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_DATABASE: notification_hub
+          MARIADB_USER: hub
+          MARIADB_PASSWORD: secret
+          MARIADB_RANDOM_ROOT_PASSWORD: '1'
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 3s --health-retries 30
+    env:
+      DB_CONNECTION: mariadb
+      DB_HOST: 127.0.0.1
+      DB_DATABASE: notification_hub
+      DB_USERNAME: hub
+      DB_PASSWORD: secret
+      RABBITMQ_HOST: 127.0.0.1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pdo_mysql, sockets, pcntl
+          coverage: none
+      - run: composer install --prefer-dist --no-interaction --no-progress
+      - run: cp .env.example .env && php artisan key:generate
+      # Real MariaDB instead of sqlite: SKIP LOCKED and row locks behave as in production.
+      - run: vendor/bin/phpunit --testsuite Feature,Integration --fail-on-skipped
+        env:
+          DB_CONNECTION: mariadb
+          DB_DATABASE: notification_hub
+
+  compose-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose up -d --build --wait api relay consumer-sms
+      - name: Send a message and wait until it is delivered
+        run: |
+          id=$(curl -sf --retry 15 --retry-connrefused --retry-delay 2 -X POST localhost:8000/api/messages \
+            -H 'Content-Type: application/json' -H 'Idempotency-Key: smoke-1' \
+            -d '{"channel":"sms","recipient":"+375291234567","body":"[flaky] smoke"}' | jq -r .data.id)
+          for i in $(seq 1 30); do
+            status=$(curl -sf localhost:8000/api/messages/$id | jq -r .data.status)
+            echo "status=$status"
+            [ "$status" = sent ] && exit 0
+            sleep 3
+          done
+          exit 1
+      - if: failure()
+        run: docker compose logs

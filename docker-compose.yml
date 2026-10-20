@@ -1,0 +1,71 @@
+x-app: &app
+  build: .
+  environment: &env
+    APP_ENV: local
+    LOG_CHANNEL: stderr
+    DB_CONNECTION: mariadb
+    DB_HOST: mariadb
+    DB_DATABASE: notification_hub
+    DB_USERNAME: hub
+    DB_PASSWORD: secret
+    CACHE_STORE: array
+    SESSION_DRIVER: array
+    RABBITMQ_HOST: rabbitmq
+    MESSAGING_RETRY_DELAYS: 5,30,120
+  restart: unless-stopped
+  depends_on:
+    setup:
+      condition: service_completed_successfully
+
+services:
+  mariadb:
+    image: mariadb:11.4
+    environment:
+      MARIADB_DATABASE: notification_hub
+      MARIADB_USER: hub
+      MARIADB_PASSWORD: secret
+      MARIADB_RANDOM_ROOT_PASSWORD: "1"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 3s
+      retries: 30
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    ports:
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 5s
+      retries: 30
+
+  setup:
+    build: .
+    environment: *env
+    command: sh -c "php artisan migrate --force && php artisan amqp:setup"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    ports:
+      - "8000:8000"
+
+  relay:
+    <<: *app
+    command: php artisan outbox:relay
+
+  consumer-sms:
+    <<: *app
+    command: php artisan messages:consume sms
+
+  consumer-email:
+    <<: *app
+    command: php artisan messages:consume email
+
+  consumer-telegram:
+    <<: *app
+    command: php artisan messages:consume telegram
